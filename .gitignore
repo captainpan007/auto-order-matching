@@ -1,0 +1,23 @@
+# 密钥文件
+SecretKey.csv
+*.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OCR缓存
+_ocr_cache*.json
+
+# Excel临时文件
+~$*.xlsx
+
+# images_ai原始系统（体积大，单独管理）
+images_ai/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Flask session
+flask_session/
