@@ -2,6 +2,12 @@
 SecretKey.csv
 *.env
 
+# 业务数据（含供应商送货单、Excel单据）
+3.16-对账汇总/
+
+# 对账结果报告
+对账结果/
+
 # Python
 __pycache__/
 *.pyc
@@ -12,7 +18,7 @@ _ocr_cache*.json
 # Excel临时文件
 ~$*.xlsx
 
-# images_ai原始系统（体积大，单独管理）
+# images_ai原始系统（含数据库配置）
 images_ai/
 
 # 系统文件
