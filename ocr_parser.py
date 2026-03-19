@@ -204,10 +204,11 @@ def _parse_number(val):
     slash_match = re.match(r'^(\d+)\s*/\s*(\d+)$', s)
     if slash_match:
         return float(slash_match.group(1))
-    # 处理"N箱"格式（如 "1箱" "2箱"）→ 取数字
-    box_match = re.match(r'^(\d+)\s*箱', s)
-    if box_match:
-        return float(box_match.group(1))
+    # 处理带中文单位的数量（如 "1箱" "2件" "25包" "1瓶"）→ 取数字
+    unit_match = re.match(r'^[-]?(\d+\.?\d*)\s*[箱件包瓶条袋桶盒托只罐]', s)
+    if unit_match:
+        num = float(unit_match.group(1))
+        return -num if s.startswith('-') else num
     # 去除换行及其后的内容（如 "无\n26.00" → 取最后的数字）
     if '\n' in s:
         parts = s.split('\n')
@@ -300,11 +301,14 @@ def _match_columns(header_row):
             mapping["barcode"] = i
         elif "条形码" in h_clean or "条码" in h_clean or "店内码" in h_clean:
             mapping["barcode"] = i
+        elif "存货编码" in h_clean:
+            # 乐元/双广/旺红的用友格式送货单，存货编码=条码
+            if "barcode" not in mapping:
+                mapping["barcode"] = i
         elif "商品编码" in h_clean:
-            # 鑫凯有"商品编码"（内部编码）和"条形码"两列，仅在无条形码时用
             if "barcode" not in mapping:
                 mapping["internal_code"] = i
-        elif "商品名称" in h_clean:
+        elif "存货名称" in h_clean or "商品名称" in h_clean:
             mapping["name"] = i
         elif "品名" in h_clean:
             if "name" not in mapping:
@@ -312,13 +316,11 @@ def _match_columns(header_row):
         elif "商品单位" in h_clean or "单位" in h_clean:
             mapping["unit"] = i
         elif "散价" in h_clean:
-            # 锐仕的"散价"是散件单价（优先于件价）
             mapping["price"] = i
         elif "件价" in h_clean:
-            # 锐仕的"件价"是整箱单价，仅在无散价时使用
             if "price" not in mapping:
                 mapping["case_price"] = i
-        elif "销售价" in h_clean or "单价" in h_clean or "价格" in h_clean:
+        elif "小单价" in h_clean or "销售价" in h_clean or "单价" in h_clean or "价格" in h_clean:
             if "price" not in mapping:
                 mapping["price"] = i
         elif "单支总数量" in h_clean:
@@ -333,9 +335,9 @@ def _match_columns(header_row):
                 mapping["qty"] = i
         elif "整件数" in h_clean or "件数" in h_clean:
             mapping["box_count"] = i
-        elif "订单金额" in h_clean or "送货金额" in h_clean:
+        elif "折后金额" in h_clean or "订单金额" in h_clean or "送货金额" in h_clean:
             mapping["amount"] = i
-        elif "金额" in h_clean and "amount" not in mapping:
+        elif "金额" in h_clean and "amount" not in mapping and "零售" not in h_clean:
             mapping["amount"] = i
 
     mapping["_merged"] = barcode_name_merged
@@ -728,6 +730,7 @@ def _extract_items_from_rows(rows, header_info, raw_rows=None):
         row_text = " ".join(str(c) for c in row)
         if "条码" in row_text or "店内码" in row_text or "条形码" in row_text \
                 or "商品条码" in row_text \
+                or "存货编码" in row_text \
                 or ("商品名称" in row_text and "金额" in row_text) \
                 or ("商品编码" in row_text and "金额" in row_text):
             col_mapping = _match_columns(row)
@@ -837,6 +840,15 @@ def _extract_items_from_rows(rows, header_info, raw_rows=None):
         if extra_qty > 0:
             warning += ("; " if warning else "") + f"多送+{extra_qty}"
 
+        # 负数行自动识别为退货（乐元/双广/旺红用友格式）
+        is_return_item = False
+        if qty is not None and qty < 0:
+            is_return_item = True
+            warning += ("; " if warning else "") + "退货行(负数)"
+        elif amount is not None and amount < 0:
+            is_return_item = True
+            warning += ("; " if warning else "") + "退货行(负数金额)"
+
         # 保存原始单元格（用于行内搜索匹配）
         row_raw = raw_rows[row_i] if raw_rows and row_i < len(raw_rows) else list(row)
 
@@ -852,6 +864,7 @@ def _extract_items_from_rows(rows, header_info, raw_rows=None):
             "qty": qty,
             "amount": amount,
             "is_cancelled": is_cancelled,
+            "is_return": is_return_item,
             "extra_qty": extra_qty,
             "ocr_warning": warning,
             "raw_cells": row_raw,
