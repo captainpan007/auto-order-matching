@@ -133,20 +133,43 @@ def _extract_header_from_table_result(table_result):
 
 def _extract_header_from_text(full_text, text_detections):
     """从文本中提取PO号、分店、日期等表头信息（通用逻辑）"""
+    # PO号正则 — 支持 PO/P0/PC（C常被误识别） + 完整编号
+    PO_PATTERN = r'[Pp][OoCc0][-—.\s]*(\d{4})[-—.\s]*(\d{2})[-—.\s]*(\d{4})'
+    PO_PATTERN_SHORT = r'[Pp][OoCc0][-—.\s]*(\d{3})[-—.\s]*(\d{2})[-—.\s]*(\d{4})'
+
     # 提取PO号 — 支持多种格式
     po_number = ""
     po_candidates = []
     for item in text_detections:
         t = item["DetectedText"].replace(" ", "") if isinstance(item, dict) else str(item)
         conf = item.get("Confidence", 100) if isinstance(item, dict) else 100
-        matches = re.findall(r'[Pp][Oo0][-—.\s]*(\d{4})[-—.\s]*(\d{2})[-—.\s]*(\d{4})', t)
+        matches = re.findall(PO_PATTERN, t)
         for y, m, n in matches:
             po_candidates.append((conf, f"PO-{y}-{m}-{n}"))
         if not matches:
-            matches2 = re.findall(r'[Pp][Oo0][-—.\s]*(\d{3})[-—.\s]*(\d{2})[-—.\s]*(\d{4})', t)
+            matches2 = re.findall(PO_PATTERN_SHORT, t)
             for y, m, n in matches2:
                 year = "2026" if y.startswith("202") else "20" + y
                 po_candidates.append((conf, f"PO-{year}-{m}-{n}"))
+
+    # PO号被拆到相邻文本块的情况（如 "P0-2026-03-" + "0068"）
+    if not po_candidates and len(text_detections) >= 2:
+        for i in range(len(text_detections) - 1):
+            t1 = text_detections[i]["DetectedText"].replace(" ", "") if isinstance(text_detections[i], dict) else str(text_detections[i])
+            t2 = text_detections[i+1]["DetectedText"].replace(" ", "") if isinstance(text_detections[i+1], dict) else str(text_detections[i+1])
+            combined = t1 + t2
+            conf = min(
+                text_detections[i].get("Confidence", 100) if isinstance(text_detections[i], dict) else 100,
+                text_detections[i+1].get("Confidence", 100) if isinstance(text_detections[i+1], dict) else 100,
+            )
+            matches = re.findall(PO_PATTERN, combined)
+            for y, m, n in matches:
+                po_candidates.append((conf, f"PO-{y}-{m}-{n}"))
+            if not matches:
+                matches2 = re.findall(PO_PATTERN_SHORT, combined)
+                for y, m, n in matches2:
+                    year = "2026" if y.startswith("202") else "20" + y
+                    po_candidates.append((conf, f"PO-{year}-{m}-{n}"))
 
     if po_candidates:
         po_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -195,7 +218,12 @@ def _parse_number(val):
     """解析数字，处理OCR可能的误识别"""
     if val is None or val == "":
         return None
-    s = str(val).strip().replace(" ", "").replace("，", "").replace(",", "")
+    s = str(val).strip()
+    # OCR常将小数点识别为空格（如 "1 900" → "1.900"，"4 200" → "4.200"）
+    space_decimal = re.match(r'^(\d{1,3})\s+(\d{3})$', s)
+    if space_decimal:
+        s = space_decimal.group(1) + "." + space_decimal.group(2)
+    s = s.replace(" ", "").replace("，", "").replace(",", "")
     # 处理可能的负号误识别
     s = s.replace("一", "-").replace("—", "-")
     # 去除验收勾选符号 √ ✓ V 等
@@ -299,7 +327,7 @@ def _match_columns(header_row):
             barcode_name_merged = True
         elif "商品条码" in h_clean:
             mapping["barcode"] = i
-        elif "条形码" in h_clean or "条码" in h_clean or "店内码" in h_clean:
+        elif ("条形码" in h_clean or "条码" in h_clean or "店内码" in h_clean) and "barcode" not in mapping:
             mapping["barcode"] = i
         elif "存货编码" in h_clean:
             # 乐元/双广/旺红的用友格式送货单，存货编码=条码
@@ -828,6 +856,16 @@ def _extract_items_from_rows(rows, header_info, raw_rows=None):
             qty = round(amount / price)
             qty_calculated = True
 
+        # 合理性校验：qty×price 应≈ amount，偏差过大时用反算值修正
+        # 常见原因：散数列的验收勾√被OCR误识别为数字1
+        if qty is not None and price and amount and price > 0 and not is_cancelled:
+            expected_amount = qty * price
+            if amount > 0 and abs(expected_amount - amount) / amount > 0.1:
+                recalc_qty = round(amount / price)
+                if recalc_qty != qty and recalc_qty > 0:
+                    qty = recalc_qty
+                    qty_calculated = True
+
         warning = ""
         if not barcode_valid:
             warning = f"条码非标准13位: {raw_barcode_str}"
@@ -933,6 +971,22 @@ def parse_delivery_pdf(pdf_path, use_v3=False):
                 rows = []
                 header_info = {"po_number": "", "store": "", "date": "", "xc_number": ""}
 
+            # PO号缺失时，调用通用OCR扫描页眉区域获取PO号
+            if not header_info.get("po_number"):
+                try:
+                    general_result = _ocr_general_from_image(client, img_b64)
+                    general_header = _extract_header_info(general_result)
+                    if general_header.get("po_number"):
+                        header_info["po_number"] = general_header["po_number"]
+                        print(f"    通用OCR补全PO: {general_header['po_number']}")
+                    if not header_info.get("store") and general_header.get("store"):
+                        header_info["store"] = general_header["store"]
+                    if not header_info.get("date") and general_header.get("date"):
+                        header_info["date"] = general_header["date"]
+                    time.sleep(0.3)
+                except Exception as e:
+                    print(f"    通用OCR补全失败: {e}")
+
             # 提取商品条目
             items = _extract_items_from_rows(rows, header_info, raw_rows=raw_rows)
             print(f"    提取条目: {len(items)} 条")
@@ -960,6 +1014,22 @@ def parse_delivery_pdf(pdf_path, use_v3=False):
                 print(f"    表格OCR失败: {e}")
                 rows = []
                 header_info = {"po_number": "", "store": "", "date": "", "xc_number": ""}
+
+            # PO号缺失时，调用通用OCR扫描页眉区域获取PO号
+            if not header_info.get("po_number"):
+                try:
+                    general_result = _ocr_general_from_image(client, img_b64)
+                    general_header = _extract_header_info(general_result)
+                    if general_header.get("po_number"):
+                        header_info["po_number"] = general_header["po_number"]
+                        print(f"    通用OCR补全PO: {general_header['po_number']}")
+                    if not header_info.get("store") and general_header.get("store"):
+                        header_info["store"] = general_header["store"]
+                    if not header_info.get("date") and general_header.get("date"):
+                        header_info["date"] = general_header["date"]
+                    time.sleep(0.3)
+                except Exception as e:
+                    print(f"    通用OCR补全失败: {e}")
 
             # 提取商品条目
             items = _extract_items_from_rows(rows, header_info, raw_rows=raw_rows)

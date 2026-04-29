@@ -451,42 +451,106 @@ def reconcile_finance(goods_items, delivery_items, return_items, supplier_name="
             delivery_by_po_barcode.setdefault((po, bc), []).append(item)
         delivery_by_barcode.setdefault((bc,), []).append(item)
 
-    consumed_d_ids = set()
+    # 分笔匹配：追踪每条OCR记录的剩余数量，支持同一条码多笔入账
+    remaining_d_qty = {}  # id(item) -> 剩余数量（None=未消耗）
 
-    def _find_delivery(g_item):
-        """多级匹配 + 行内搜索 查找送货单条目"""
+    def _d_available(item):
+        """检查OCR条目是否仍有剩余数量可分配"""
+        item_id = id(item)
+        if item_id not in remaining_d_qty:
+            return True
+        return remaining_d_qty[item_id] > 0
+
+    def _consume_d(item, needed_qty):
+        """从OCR条目消耗指定数量，返回 (用于比对的条目, 分笔备注)"""
+        item_id = id(item)
+        orig_qty = item.get("qty", 0) or 0
+        if item_id not in remaining_d_qty:
+            remaining_d_qty[item_id] = orig_qty
+
+        remaining = remaining_d_qty[item_id]
+        price = item.get("price", 0) or 0
+
+        if needed_qty > 0 and remaining > needed_qty:
+            # 部分消耗：拆分OCR数量，只分配所需数量
+            remaining_d_qty[item_id] = round(remaining - needed_qty, 4)
+            virtual = dict(item)
+            virtual["qty"] = needed_qty
+            virtual["amount"] = round(needed_qty * price, 2)
+            note = f"分笔匹配: OCR原始{orig_qty}件, 本笔分配{needed_qty}件, 剩余{round(remaining - needed_qty, 4)}件"
+            return virtual, note
+        else:
+            # 完全消耗：分配所有剩余数量
+            remaining_d_qty[item_id] = 0
+            if remaining < orig_qty:
+                # 之前已被部分消耗，返回剩余数量的虚拟条目
+                virtual = dict(item)
+                virtual["qty"] = remaining
+                virtual["amount"] = round(remaining * price, 2)
+                note = f"分笔匹配: OCR原始{orig_qty}件, 本笔分配{remaining}件(全部剩余)"
+                return virtual, note
+            else:
+                # 首次消耗且完全匹配
+                return item, ""
+
+    def _find_delivery(g_item, po_only=False):
+        """多级匹配 + 分笔消耗 + 行内搜索 查找送货单条目
+        Args:
+            po_only: True=仅PO+条码匹配（第一轮），False=含条码回退和行内搜索（第二轮）
+        """
         po = g_item.get("po_number", "")
         bc = g_item.get("barcode", "")
+        g_qty = g_item.get("qty", 0) or 0
         g_amt = g_item.get("amount")
 
-        # 第一阶段：键索引匹配
-        candidates_list = []
+        # PO+条码精确匹配（优先级最高）
         if po:
-            candidates_list.append(delivery_by_po_barcode.get((po, bc), []))
-        candidates_list.append(delivery_by_barcode.get((bc,), []))
-        for candidates in candidates_list:
-            for item in candidates:
-                if id(item) not in consumed_d_ids:
-                    consumed_d_ids.add(id(item))
-                    return item
+            for item in delivery_by_po_barcode.get((po, bc), []):
+                if _d_available(item):
+                    return _consume_d(item, g_qty)
 
-        # 第二阶段：行内搜索 — 在送货单的每行原始单元格中搜索进货单条码+金额
+        if po_only:
+            return None, ""
+
+        # 条码回退匹配（仅第二轮）
+        for item in delivery_by_barcode.get((bc,), []):
+            if _d_available(item):
+                return _consume_d(item, g_qty)
+
+        # 行内搜索 — 在送货单的每行原始单元格中搜索进货单条码+金额
         if bc and g_amt:
             for d_item in delivery_items:
-                if id(d_item) in consumed_d_ids:
+                if not _d_available(d_item):
                     continue
                 raw_cells = d_item.get("raw_cells", [])
                 if raw_cells and _search_barcode_in_row(raw_cells, bc):
                     if _search_amount_in_row(raw_cells, g_amt):
-                        consumed_d_ids.add(id(d_item))
-                        return d_item
+                        return _consume_d(d_item, g_qty)
 
-        return None
+        return None, ""
 
-    # 遍历进货单逐条匹配
+    # 两轮匹配：第一轮PO+条码精确匹配，第二轮条码回退+行内搜索
+    # 防止条码回退抢占本该属于PO精确匹配的OCR数量
+    pending_goods = []  # 第一轮未匹配的进货单条目
     for g_item in goods_items:
-        d_item = _find_delivery(g_item)
+        d_item, split_note = _find_delivery(g_item, po_only=True)
+        if not d_item:
+            pending_goods.append(g_item)
+            continue
+        # 第一轮匹配成功，直接处理（复用下方比对逻辑）
+        pending_goods.append(("__matched__", g_item, d_item, split_note))
 
+    # 第二轮：对未匹配条目做条码回退+行内搜索
+    final_goods = []
+    for entry in pending_goods:
+        if isinstance(entry, tuple) and entry[0] == "__matched__":
+            final_goods.append(entry[1:])  # (g_item, d_item, split_note)
+        else:
+            g_item = entry
+            d_item, split_note = _find_delivery(g_item, po_only=False)
+            final_goods.append((g_item, d_item, split_note))
+
+    for g_item, d_item, split_note in final_goods:
         if not d_item:
             unmatched_goods.append({
                 "source": "进货单",
@@ -506,6 +570,11 @@ def reconcile_finance(goods_items, delivery_items, return_items, supplier_name="
         price_diff, price_match = _diff_value(g_item.get("price"), d_item.get("price"), AMOUNT_TOLERANCE)
         amount_diff, amount_match = _diff_value(g_item.get("amount"), d_item.get("amount"), AMOUNT_TOLERANCE)
 
+        # 合并OCR警告和分笔备注
+        ocr_warn = d_item.get("ocr_warning", "")
+        if split_note:
+            ocr_warn += ("; " if ocr_warn else "") + split_note
+
         record = {
             "po_number": g_item.get("po_number", ""),
             "barcode": g_item.get("barcode", ""),
@@ -521,7 +590,7 @@ def reconcile_finance(goods_items, delivery_items, return_items, supplier_name="
             "amount_goods": g_item.get("amount"),
             "amount_delivery": d_item.get("amount"),
             "amount_diff": amount_diff,
-            "ocr_warning": d_item.get("ocr_warning", ""),
+            "ocr_warning": ocr_warn,
             "phase": "财务对账",
         }
 
@@ -575,21 +644,39 @@ def reconcile_finance(goods_items, delivery_items, return_items, supplier_name="
             record["severity"] = severity
             diff.append(record)
 
-    # 查找送货单中未匹配的条目
+    # 查找送货单中未匹配的条目（完全未消耗或有剩余数量的）
     for d_item in delivery_items:
-        if id(d_item) not in consumed_d_ids:
-                unmatched_delivery.append({
-                    "source": "送货单",
-                    "po_number": d_item.get("po_number", ""),
-                    "barcode": d_item.get("barcode", ""),
-                    "name": d_item.get("name", ""),
-                    "store": d_item.get("store", ""),
-                    "qty": d_item.get("qty"),
-                    "price": d_item.get("price"),
-                    "amount": d_item.get("amount"),
-                    "reason": "进货单中未找到匹配",
-                    "ocr_warning": d_item.get("ocr_warning", ""),
-                })
+        item_id = id(d_item)
+        if item_id not in remaining_d_qty:
+            # 完全未被匹配过
+            unmatched_delivery.append({
+                "source": "送货单",
+                "po_number": d_item.get("po_number", ""),
+                "barcode": d_item.get("barcode", ""),
+                "name": d_item.get("name", ""),
+                "store": d_item.get("store", ""),
+                "qty": d_item.get("qty"),
+                "price": d_item.get("price"),
+                "amount": d_item.get("amount"),
+                "reason": "进货单中未找到匹配",
+                "ocr_warning": d_item.get("ocr_warning", ""),
+            })
+        elif remaining_d_qty[item_id] > 0:
+            # 部分消耗后仍有剩余
+            leftover = remaining_d_qty[item_id]
+            price = d_item.get("price", 0) or 0
+            unmatched_delivery.append({
+                "source": "送货单",
+                "po_number": d_item.get("po_number", ""),
+                "barcode": d_item.get("barcode", ""),
+                "name": d_item.get("name", ""),
+                "store": d_item.get("store", ""),
+                "qty": leftover,
+                "price": price,
+                "amount": round(leftover * price, 2),
+                "reason": f"分笔后剩余{leftover}件未匹配",
+                "ocr_warning": d_item.get("ocr_warning", ""),
+            })
 
     # 退货单处理
     for r_item in return_items:

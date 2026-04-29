@@ -24,10 +24,9 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
 
 # ─── 配置 ───
-DATA_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)))
-BASE_DIR = r"F:\claude开发项目\atutoordermatching\3.16-对账汇总"
-OUTPUT_DIR = r"F:\claude开发项目\atutoordermatching\对账结果"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+from config import BASE_DATA_DIR, BASE_APP_DIR, OUTPUT_DIR
+SCRIPT_DIR = BASE_APP_DIR
+BASE_DIR = ""  # 当前选中的批次路径，启动时由 _get_batches() 自动设置
 
 # ─── 全局状态 ───
 run_state = {
@@ -38,6 +37,7 @@ run_state = {
     "total": 0,
     "done": False,
     "results": [],
+    "mode": "purchase",
 }
 
 
@@ -118,59 +118,31 @@ INDEX_HTML = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超市采购对账系统</title>""" + STYLE + """
 <style>
-.tabs { display: flex; gap: 0; margin-bottom: 0; }
-.tab { padding: 10px 24px; cursor: pointer; background: #e5e7eb; border-radius: 8px 8px 0 0;
-       font-size: 14px; font-weight: 600; color: #555; }
-.tab.active { background: #fff; color: #1a56db; box-shadow: 0 -1px 3px rgba(0,0,0,0.08); }
-.tab-body { background: #fff; border-radius: 0 8px 8px 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 15px; }
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
-.upload-area { border: 2px dashed #d1d5db; border-radius: 8px; padding: 30px 20px; text-align: center;
-               color: #888; cursor: pointer; transition: all 0.2s; margin: 8px 0; }
-.upload-area:hover, .upload-area.dragover { border-color: #1a56db; background: #eff6ff; color: #1a56db; }
-.upload-area input[type=file] { display: none; }
-.file-list { margin-top: 8px; }
-.file-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
-.file-item .ok { color: #16a34a; } .file-item .fail { color: #dc2626; }
-.supplier-upload { border: 1px solid #eee; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
-.supplier-upload h3 { font-size: 14px; margin-bottom: 8px; color: #333; }
-.upload-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
-.upload-slot { flex: 1; min-width: 180px; }
-.upload-slot label { font-size: 12px; color: #666; display: block; margin-bottom: 4px; }
-.upload-slot .mini-upload { border: 1px dashed #ccc; border-radius: 4px; padding: 8px; text-align: center;
-                            font-size: 12px; color: #888; cursor: pointer; min-height: 36px; }
-.upload-slot .mini-upload:hover { border-color: #1a56db; color: #1a56db; }
-.upload-slot .mini-upload.done { border-color: #16a34a; background: #f0fdf4; color: #166534; }
 .batch-select { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.batch-select select, .batch-select input { padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
-.batch-select select { min-width: 200px; }
-.batch-select input { flex: 1; min-width: 150px; }
-.add-supplier-row { display: flex; gap: 8px; margin-bottom: 10px; }
-.add-supplier-row input { flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px; }
+.batch-select select { padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; min-width: 320px; }
+.btn-refresh { background: none; border: 1px solid #d1d5db; border-radius: 6px; padding: 7px 12px; cursor: pointer;
+               font-size: 16px; color: #555; transition: all 0.2s; }
+.btn-refresh:hover { border-color: #1a56db; color: #1a56db; background: #eff6ff; }
+.btn-refresh.spinning { animation: spin 0.6s linear; pointer-events: none; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 </style>
 </head><body>
 <div class="container">
 <h1>超市采购对账系统</h1>
 
-<!-- Tabs -->
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('existing')">已有批次对账</div>
-  <div class="tab" onclick="switchTab('upload')">上传新批次</div>
-</div>
-
-<!-- Tab 1: 已有批次 -->
-<div class="tab-body">
-<div class="tab-pane active" id="pane-existing">
-<form method="POST" action="/run">
+<div class="card">
+<form method="POST" action="/run" id="mainForm">
+  <input type="hidden" name="batch_path" id="batchPathInput" value="{{current_batch}}">
   <h2 style="margin-bottom:12px">选择批次和供应商</h2>
 
   <div class="batch-select" style="margin-bottom:15px">
     <label>数据批次:</label>
     <select name="batch" id="batchSelect" onchange="loadSuppliers()">
       {% for b in batches %}
-      <option value="{{b.path}}" {% if b.current %}selected{% endif %}>{{b.name}} ({{b.count}}家供应商)</option>
+      <option value="{{b.path}}" {% if b.current %}selected{% endif %}>{{b.name}}</option>
       {% endfor %}
     </select>
+    <button type="button" class="btn-refresh" onclick="refreshBatches()" id="refreshBtn" title="重新扫描目录">&#x1f504;</button>
   </div>
 
   <div id="supplierArea">
@@ -185,6 +157,21 @@ INDEX_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <div style="margin-top:15px;padding:12px;background:#f8f9fa;border-radius:8px">
+    <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">对账模式：</label>
+    <label style="display:inline-flex;align-items:center;gap:6px;margin-right:20px;cursor:pointer">
+      <input type="radio" name="mode" value="purchase" checked style="accent-color:#1a56db">
+      <span>采购对账（倩茹）</span>
+      <span style="font-size:11px;color:#888">— 核对送货单 vs 采购入库单</span>
+    </label>
+    <br style="margin-bottom:6px">
+    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin-top:6px">
+      <input type="radio" name="mode" value="finance" style="accent-color:#1a56db">
+      <span>财务对账（文钰）</span>
+      <span style="font-size:11px;color:#888">— 核对送货单 vs 进货单</span>
+    </label>
+  </div>
+
   <div style="margin-top:12px">
     <label><input type="checkbox" name="no_cache"> 强制重新OCR（清除缓存）</label>
   </div>
@@ -192,35 +179,11 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="center" style="margin-top:15px">
     <button type="submit" class="btn">开始对账</button>
   </div>
+  <div style="margin-top:12px;text-align:center;font-size:12px;color:#aaa">
+    本机局域网地址：<a href="http://{{local_ip}}:5000" style="color:#888">http://{{local_ip}}:5000</a>
+    &nbsp;（文钰可在自己电脑浏览器输入此地址访问）
+  </div>
 </form>
-</div>
-
-<!-- Tab 2: 上传新批次 -->
-<div class="tab-pane" id="pane-upload">
-  <h2 style="margin-bottom:12px">创建新批次并上传文件</h2>
-
-  <div class="batch-select" style="margin-bottom:15px">
-    <label>批次名称:</label>
-    <input type="text" id="newBatchName" placeholder="如：3月下旬对账" value="">
-    <button class="btn btn-sm" onclick="createBatch()">创建批次</button>
-  </div>
-
-  <div id="uploadZone" style="display:none">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <h3 style="margin:0" id="batchTitle"></h3>
-      <div class="add-supplier-row">
-        <input type="text" id="newSupplierName" placeholder="添加供应商名称">
-        <button class="btn btn-sm" onclick="addSupplier()">添加</button>
-      </div>
-    </div>
-
-    <div id="supplierUploads"></div>
-
-    <div class="center" style="margin-top:15px">
-      <button class="btn btn-green" onclick="goReconcile()" id="goBtn" style="display:none">上传完成，开始对账</button>
-    </div>
-  </div>
-</div>
 </div>
 
 {% if has_reports %}
@@ -232,145 +195,53 @@ INDEX_HTML = """<!DOCTYPE html>
 
 </div>
 <script>
-var currentBatch = '';
-var supplierList = [];
-
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(function(t,i) {
-    t.classList.toggle('active', (name==='existing' && i===0) || (name==='upload' && i===1));
-  });
-  document.getElementById('pane-existing').classList.toggle('active', name==='existing');
-  document.getElementById('pane-upload').classList.toggle('active', name==='upload');
-}
-
 function checkAll(v) {
   document.querySelectorAll('input[name=suppliers]').forEach(function(c) { c.checked = v; });
 }
 
 function loadSuppliers() {
   var sel = document.getElementById('batchSelect');
-  window.location.href = '/?batch=' + encodeURIComponent(sel.value);
-}
-
-function createBatch() {
-  var name = document.getElementById('newBatchName').value.trim();
-  if (!name) { alert('请输入批次名称'); return; }
-  fetch('/api/create_batch', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({name: name})
-  }).then(function(r) { return r.json(); }).then(function(data) {
-    if (data.success) {
-      currentBatch = data.path;
-      document.getElementById('batchTitle').textContent = '批次: ' + name;
-      document.getElementById('uploadZone').style.display = 'block';
-      supplierList = [];
-      document.getElementById('supplierUploads').innerHTML = '<p style="color:#888;font-size:13px">请添加供应商并上传文件</p>';
-    } else {
-      alert(data.msg);
-    }
-  });
-}
-
-function addSupplier() {
-  var name = document.getElementById('newSupplierName').value.trim();
-  if (!name) return;
-  document.getElementById('newSupplierName').value = '';
-  supplierList.push(name);
-
-  // 创建供应商文件夹
-  fetch('/api/create_supplier', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({batch: currentBatch, supplier: name})
-  });
-
-  renderSupplierUploads();
-}
-
-var slotHints = {
-  receipt: '用友 > 采购管理 > 采购入库单 > 导出Excel',
-  goods: '用友 > 采购管理 > 进货单 > 导出Excel',
-  pdf: '供应商纸质单拍照，PDF或JPG均可'
-};
-function mkSlot(idx, type, label, accept, multi) {
-  var m = multi ? ' multiple' : '';
-  var q = String.fromCharCode(39);
-  return '<div class="upload-slot"><label>' + label + '</label>' +
-    '<div class="mini-upload" id="mu-'+idx+'-'+type+'" onclick="pickFile('+idx+','+q+type+q+')">' +
-    '点击选择或拖入</div>' +
-    '<input type="file" id="fi-'+idx+'-'+type+'" accept="'+accept+'"'+m+
-    ' onchange="uploadFile('+idx+','+q+type+q+')" style="display:none">' +
-    '<div style="font-size:11px;color:#aaa;margin-top:3px">' + slotHints[type] + '</div></div>';
-}
-
-function renderSupplierUploads() {
-  var html = '';
-  supplierList.forEach(function(name, idx) {
-    html += '<div class="supplier-upload"><h3>'+name+'</h3><div class="upload-row">' +
-      mkSlot(idx, 'receipt', '采购入库单 (Excel)', '.xlsx,.xls', false) +
-      mkSlot(idx, 'goods', '进货单 (Excel)', '.xlsx,.xls', false) +
-      mkSlot(idx, 'pdf', '送货单PDF (可多选)', '.pdf', true) +
-      '</div></div>';
-  });
-  document.getElementById('supplierUploads').innerHTML = html;
-  document.getElementById('goBtn').style.display = supplierList.length > 0 ? '' : 'none';
-
-  // 拖拽绑定
-  supplierList.forEach(function(name, idx) {
-    ['receipt','goods','pdf'].forEach(function(type) {
-      var el = document.getElementById('mu-'+idx+'-'+type);
-      if (!el) return;
-      el.addEventListener('dragover', function(e) { e.preventDefault(); el.classList.add('dragover'); });
-      el.addEventListener('dragleave', function() { el.classList.remove('dragover'); });
-      el.addEventListener('drop', function(e) {
-        e.preventDefault(); el.classList.remove('dragover');
-        var fi = document.getElementById('fi-'+idx+'-'+type);
-        fi.files = e.dataTransfer.files;
-        uploadFile(idx, type);
-      });
-    });
-  });
-}
-
-function pickFile(idx, type) {
-  document.getElementById('fi-'+idx+'-'+type).click();
-}
-
-function uploadFile(idx, type) {
-  var fi = document.getElementById('fi-'+idx+'-'+type);
-  var mu = document.getElementById('mu-'+idx+'-'+type);
-  if (!fi.files.length) return;
-
-  var fd = new FormData();
-  fd.append('batch', currentBatch);
-  fd.append('supplier', supplierList[idx]);
-  fd.append('type', type);
-  for (var i = 0; i < fi.files.length; i++) {
-    fd.append('files', fi.files[i]);
-  }
-
-  mu.textContent = '上传中...';
-  mu.style.color = '#888';
-
-  fetch('/api/upload', { method: 'POST', body: fd })
+  var batchPath = sel.value;
+  fetch('/api/suppliers?batch=' + encodeURIComponent(batchPath))
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (data.success) {
-        var names = data.files.join(', ');
-        mu.textContent = '\\u2714 ' + names;
-        mu.classList.add('done');
-      } else {
-        mu.textContent = '\\u2718 ' + data.msg;
-        mu.style.color = '#dc2626';
-      }
-    })
-    .catch(function() {
-      mu.textContent = '\\u2718 上传失败';
-      mu.style.color = '#dc2626';
+      var area = document.querySelector('#supplierArea .suppliers');
+      var html = '';
+      data.suppliers.forEach(function(s) {
+        html += '<label><input type="checkbox" name="suppliers" value="' + s + '" checked> ' + s + '</label>';
+      });
+      area.innerHTML = html || '<span style="color:#888">该批次下无供应商文件夹</span>';
+      document.getElementById('batchPathInput').value = batchPath;
     });
 }
 
-function goReconcile() {
-  window.location.href = '/?batch=' + encodeURIComponent(currentBatch);
+function refreshBatches() {
+  var btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+  fetch('/api/batches')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var sel = document.getElementById('batchSelect');
+      var curVal = sel.value;
+      sel.innerHTML = '';
+      data.batches.forEach(function(b) {
+        var opt = document.createElement('option');
+        opt.value = b.path;
+        opt.textContent = b.name;
+        if (b.path === curVal) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      // 如果之前选中的批次不在新列表中，选第一个
+      if (sel.selectedIndex < 0 && sel.options.length > 0) {
+        sel.selectedIndex = 0;
+      }
+      loadSuppliers();
+      btn.classList.remove('spinning');
+    })
+    .catch(function() {
+      btn.classList.remove('spinning');
+      alert('刷新失败');
+    });
 }
 </script>
 </body></html>
@@ -458,8 +329,10 @@ RESULT_HTML = """<!DOCTYPE html>
 .s-info { font-size: 13px; color: #555; line-height: 1.8; }
 .s-info span { font-weight: 600; }
 .s-diff-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.s-diff-badge.has { background: #fee2e2; color: #dc2626; }
-.s-diff-badge.none { background: #dcfce7; color: #166534; }
+.s-diff-badge.diff-green { background: #dcfce7; color: #166534; }
+.s-diff-badge.diff-orange { background: #ffedd5; color: #c2410c; }
+.s-diff-badge.diff-orange-red { background: #fee2e2; color: #dc2626; }
+.s-diff-badge.diff-red { background: #dc2626; color: #fff; }
 .s-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .diff-detail { display: none; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
 .diff-detail.show { display: block; }
@@ -470,6 +343,13 @@ RESULT_HTML = """<!DOCTYPE html>
 .diff-table .sev-red { color: #dc2626; font-weight: 600; }
 .diff-table .sev-yellow { color: #b45309; font-weight: 600; }
 .empty-msg { text-align: center; padding: 60px 20px; color: #999; font-size: 16px; }
+.tip-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+            border-radius: 50%; background: #9ca3af; color: #fff; font-size: 11px; font-weight: bold;
+            cursor: help; margin-left: 4px; vertical-align: middle; position: relative; }
+.tip-icon:hover::after { content: attr(title); position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+            background: #333; color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: normal;
+            white-space: nowrap; z-index: 100; max-width: 280px; white-space: normal; line-height: 1.4;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
 @media (max-width: 600px) {
   .s-body { gap: 10px; }
   .todo-row .todo-desc { min-width: 120px; font-size: 12px; }
@@ -477,7 +357,7 @@ RESULT_HTML = """<!DOCTYPE html>
 }
 </style></head><body>
 <div class="container">
-<h1>对账结果</h1>
+<h1>{% if mode == 'finance' %}财务对账结果（文钰）{% else %}采购对账结果（倩茹）{% endif %}</h1>
 
 {% if not data %}
 <div class="card"><div class="empty-msg">暂无数据，请先<a href="/">开始对账</a></div></div>
@@ -489,12 +369,25 @@ RESULT_HTML = """<!DOCTYPE html>
   <div class="overview">
     <div class="stat-box"><div class="num">{{summary.date}}</div><div class="label">对账日期</div></div>
     <div class="stat-box blue"><div class="num">{{summary.total_suppliers}}</div><div class="label">供应商数</div></div>
+    {% if mode != 'finance' %}
     <div class="stat-box green"><div class="num">{{summary.purchase_rate}}</div><div class="label">采购一致率</div></div>
+    {% endif %}
+    {% if mode != 'purchase' %}
+    <div class="stat-box green"><div class="num">{{summary.finance_rate}}</div><div class="label">财务一致率</div></div>
+    {% endif %}
     <div class="stat-box {% if summary.total_diff > 0 %}red{% endif %}">
       <div class="num">{{summary.total_diff}}</div><div class="label">差异待处理</div></div>
+    {% if mode != 'purchase' %}
     <div class="stat-box blue"><div class="num">{{summary.total_payable}}</div><div class="label">合计应付</div></div>
     {% if summary.total_return != '0.00' %}<div class="stat-box"><div class="num">{{summary.total_return}}</div><div class="label">合计退货</div></div>{% endif %}
+    {% endif %}
   </div>
+  {% if po_numbers %}
+  <div style="margin-top:12px;font-size:13px;color:#555;line-height:1.8">
+    <span style="font-weight:600">本批次PO号：</span>
+    <span style="color:#333">{{po_numbers|join('、')}}</span>
+  </div>
+  {% endif %}
 </div>
 
 <!-- 待处理事项 -->
@@ -511,7 +404,7 @@ RESULT_HTML = """<!DOCTYPE html>
     <div class="todo-group-header" onclick="toggleGroup(this)" style="cursor:pointer;padding:8px 4px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px">
       <span class="todo-arrow" style="font-size:12px;color:#888">&#9654;</span>
       <span style="font-weight:600;color:#1a56db">{{g.supplier}}</span>
-      <span class="s-diff-badge has" style="font-size:12px">{{g.entries|length}} 条差异</span>
+      <span class="s-diff-badge {% if g.entries|length >= 50 %}diff-red{% elif g.entries|length >= 10 %}diff-orange-red{% else %}diff-orange{% endif %}" style="font-size:12px">{{g.entries|length}} 条差异</span>
     </div>
     <div class="todo-group-body" style="display:none">
       {% for t in g.entries %}
@@ -540,22 +433,30 @@ RESULT_HTML = """<!DOCTYPE html>
   <div class="s-card {{s.color}}">
     <div class="s-top">
       <span class="s-name">{{s.supplier}}</span>
-      <span class="s-status">{{s.status}}</span>
+      <span class="s-status">{{s.status|safe}}</span>
     </div>
     <div class="s-body">
+      {% if mode != 'finance' %}
       <div class="s-rate"><div class="val" style="color:{{s.purchase_color}}">{{s.purchase_rate}}</div><div class="lbl">采购对账</div></div>
+      {% endif %}
+      {% if mode != 'purchase' %}
       <div class="s-rate"><div class="val" style="color:{{s.finance_color}}">{{s.finance_rate}}</div><div class="lbl">财务对账</div></div>
       <div class="s-info">
         进货: <span>{{s.goods_amount}}</span>
-        {% if s.return_amount != '0.00' %} &nbsp; 退货: <span style="color:#dc2626">-{{s.return_amount}}</span>{% endif %}
+        {% if s.return_amount != '0.00' %} &nbsp; 退货：<span style="color:#dc2626;font-weight:600">-&yen;{{s.return_amount}}</span>{% endif %}
         &nbsp; 应付: <span style="color:#1a56db">{{s.payable}}</span>
       </div>
+      {% endif %}
     </div>
     <div class="s-actions">
-      {% if s.diff_count > 0 %}
-        <span class="s-diff-badge has" onclick="toggleDiff('diff-{{loop.index}}')">{{s.diff_count}} 条差异 ▼</span>
+      {% if s.diff_count == 0 %}
+        <span class="s-diff-badge diff-green">&#10003; 无差异</span>
+      {% elif s.diff_count < 10 %}
+        <span class="s-diff-badge diff-orange" onclick="toggleDiff('diff-{{loop.index}}')">{{s.diff_count}} 条差异 &#9660;</span>
+      {% elif s.diff_count < 50 %}
+        <span class="s-diff-badge diff-orange-red" onclick="toggleDiff('diff-{{loop.index}}')">{{s.diff_count}} 条差异 &#9660;</span>
       {% else %}
-        <span class="s-diff-badge none">无差异</span>
+        <span class="s-diff-badge diff-red" onclick="toggleDiff('diff-{{loop.index}}')">{{s.diff_count}} 条差异 &#9660;</span>
       {% endif %}
       {% if s.report_file %}<a href="/download/{{s.report_file}}" class="btn btn-sm">下载报告</a>{% endif %}
     </div>
@@ -635,34 +536,114 @@ function filterTodo(mode) {
 # 路由
 # ═══════════════════════════════════════
 
-def _get_batches():
-    """获取所有批次目录"""
-    batches = []
-    for d in sorted(Path(SCRIPT_DIR).iterdir()):
-        if not d.is_dir():
+def _is_batch_dir(d):
+    """判断目录是否为有效批次（含供应商子文件夹且子文件夹内有Excel/PDF）"""
+    if not d.is_dir():
+        return False
+    subs = [s for s in d.iterdir() if s.is_dir() and not s.name.startswith(("_", "."))]
+    if not subs:
+        return False
+    return any((s / f).exists() for s in subs for f in os.listdir(s) if f.endswith(('.xlsx', '.pdf')))
+
+def _is_supplier_dir(d):
+    """判断目录是否为供应商目录（直接包含 xlsx/pdf 文件）"""
+    if not d.is_dir():
+        return False
+    return any(f.suffix.lower() in ('.xlsx', '.xls', '.pdf') for f in d.iterdir() if f.is_file())
+
+def _get_supplier_names(batch_path):
+    """获取批次下的供应商名称列表（排除嵌套的子批次）"""
+    p = Path(batch_path)
+    names = []
+    for s in p.iterdir():
+        if not s.is_dir() or s.name.startswith(("_", ".")):
             continue
-        # 包含供应商子文件夹的目录视为批次
-        subs = [s for s in d.iterdir() if s.is_dir() and not s.name.startswith(("_", "."))]
-        if subs and any((s / f).exists() for s in subs for f in os.listdir(s) if f.endswith(('.xlsx', '.pdf'))):
-            batches.append({"name": d.name, "path": str(d), "count": len(subs), "current": str(d) == BASE_DIR})
+        # 供应商目录 = 直接包含 xlsx/pdf 文件
+        if _is_supplier_dir(s):
+            names.append(s.name)
+    return sorted(names)
+
+def _format_batch_name(dir_name):
+    """尝试把目录名格式化为可读日期，如 3.16-对账汇总 → 2026-03-16"""
+    import re
+    year = datetime.now().year
+    # 匹配 YYYYMMDD
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})$', dir_name)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    # 匹配 M.DD 或 MM.DD 格式（3.16 → 月=3,日=16）
+    m = re.match(r'^(\d{1,2})\.(\d{1,2})', dir_name)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        return f"{year}-{month:02d}-{day:02d}"
+    return dir_name
+
+def _get_batches():
+    """扫描 BASE_DATA_DIR 下所有有效批次（两层深度），按名称倒序"""
+    batches = []
+    scan_root = Path(BASE_DATA_DIR)
+    if not scan_root.is_dir():
+        return batches
+
+    for d in sorted(scan_root.iterdir(), reverse=True):
+        if not d.is_dir() or d.name.startswith(("_", ".", "__")):
+            continue
+        if _is_batch_dir(d):
+            suppliers = _get_supplier_names(str(d))
+            display = _format_batch_name(d.name)
+            if suppliers:
+                display += f"（{'、'.join(suppliers[:5])}{'…' if len(suppliers) > 5 else ''}）"
+            batches.append({"name": display, "path": str(d), "count": len(suppliers),
+                            "suppliers": suppliers, "current": str(d) == BASE_DIR})
+            # 扫描子目录一层
+            for sub in sorted(d.iterdir(), reverse=True):
+                if sub.is_dir() and not sub.name.startswith(("_", ".")) and _is_batch_dir(sub):
+                    sub_suppliers = _get_supplier_names(str(sub))
+                    sub_display = _format_batch_name(sub.name)
+                    if sub_suppliers:
+                        sub_display += f"（{'、'.join(sub_suppliers[:5])}{'…' if len(sub_suppliers) > 5 else ''}）"
+                    batches.append({"name": sub_display, "path": str(sub), "count": len(sub_suppliers),
+                                    "suppliers": sub_suppliers, "current": str(sub) == BASE_DIR})
     return batches
 
 
 @app.route("/")
 def index():
     global BASE_DIR
+    batches = _get_batches()
+
     # 支持批次切换
     batch_path = request.args.get("batch", BASE_DIR)
-    if os.path.isdir(batch_path):
+    if batch_path and os.path.isdir(batch_path):
         BASE_DIR = batch_path
+    # 如果 BASE_DIR 未设置或无效，自动选第一个批次
+    if (not BASE_DIR or not os.path.isdir(BASE_DIR)) and batches:
+        BASE_DIR = batches[0]["path"]
 
     suppliers = _get_suppliers()
     has_reports = len(_get_reports()) > 0
-    batches = _get_batches()
     # 标记当前批次
     for b in batches:
         b["current"] = b["path"] == BASE_DIR
-    return render_template_string(INDEX_HTML, suppliers=suppliers, has_reports=has_reports, batches=batches)
+    return render_template_string(INDEX_HTML, suppliers=suppliers, has_reports=has_reports,
+                                   batches=batches, current_batch=BASE_DIR,
+                                   local_ip=_get_local_ip())
+
+
+@app.route("/api/suppliers")
+def api_suppliers():
+    batch_path = request.args.get("batch", BASE_DIR)
+    if not os.path.isdir(batch_path):
+        return jsonify({"suppliers": []})
+    subs = sorted([d.name for d in Path(batch_path).iterdir()
+                   if d.is_dir() and not d.name.startswith(("_", "."))])
+    return jsonify({"suppliers": subs})
+
+
+@app.route("/api/batches")
+def api_batches():
+    batches = _get_batches()
+    return jsonify({"batches": [{"name": b["name"], "path": b["path"]} for b in batches]})
 
 
 @app.route("/api/create_batch", methods=["POST"])
@@ -720,11 +701,16 @@ def api_upload():
 
 @app.route("/run", methods=["GET", "POST"])
 def run():
+    global BASE_DIR
     if request.method == "POST" and not run_state["running"]:
+        batch_path = request.form.get("batch_path", BASE_DIR)
+        if os.path.isdir(batch_path):
+            BASE_DIR = batch_path
         selected = request.form.getlist("suppliers")
         no_cache = "no_cache" in request.form
+        mode = request.form.get("mode", "purchase")
         if selected:
-            _start_reconcile(selected, no_cache)
+            _start_reconcile(selected, no_cache, mode)
     return render_template_string(RUN_HTML)
 
 
@@ -749,9 +735,10 @@ def api_status():
 
 @app.route("/result")
 def result():
+    mode = run_state.get("mode", "purchase")
     report_data = _load_summary_from_xlsx()
     if not report_data:
-        return render_template_string(RESULT_HTML, data=None, summary=None, todo_items=None)
+        return render_template_string(RESULT_HTML, data=None, summary=None, todo_items=None, mode=mode)
 
     data, summary = report_data
 
@@ -779,8 +766,11 @@ def result():
             })
             todo_total += len(group_items)
 
+    report_files = [s["report_file"] for s in data if s.get("report_file")]
+    po_numbers = _collect_po_numbers(report_files)
     return render_template_string(RESULT_HTML, data=data, summary=summary,
-                                  todo_groups=todo_groups, todo_total=todo_total)
+                                  todo_groups=todo_groups, todo_total=todo_total, mode=mode,
+                                  po_numbers=po_numbers)
 
 
 @app.route("/download/<filename>")
@@ -864,6 +854,34 @@ def _make_human_desc(d):
     return "；".join(parts)
 
 
+def _collect_po_numbers(report_files):
+    """从指定的供应商报告文件中收集去重的PO号列表"""
+    if not report_files:
+        return []
+    po_set = set()
+    for fname in report_files:
+        f = Path(OUTPUT_DIR) / fname
+        if not f.exists():
+            continue
+        try:
+            wb = openpyxl.load_workbook(str(f), read_only=True, data_only=True)
+            for sheet_name in ["一致项", "差异项"]:
+                if sheet_name not in wb.sheetnames:
+                    continue
+                ws = wb[sheet_name]
+                # 一致项: PO号在col 2, 差异项: PO号在col 3
+                po_col = 2 if sheet_name == "一致项" else 3
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if len(row) > po_col and row[po_col]:
+                        po = str(row[po_col]).strip()
+                        if po and po != "None":
+                            po_set.add(po)
+            wb.close()
+        except Exception:
+            continue
+    return sorted(po_set)
+
+
 def _load_diffs_for_supplier(supplier_name):
     """从供应商对账报告的Sheet2(差异项)读取差异明细"""
     if not os.path.isdir(OUTPUT_DIR):
@@ -934,7 +952,13 @@ def _load_summary_from_xlsx():
     if not summary_files:
         return None
 
-    wb = openpyxl.load_workbook(str(summary_files[0]), read_only=True, data_only=True)
+    summary_file = summary_files[0]
+    # 提取日期后缀用于匹配同批次的供应商报告（如 20260323）
+    import re as _re
+    _date_match = _re.search(r'(\d{8})', summary_file.name)
+    report_date = _date_match.group(1) if _date_match else ""
+
+    wb = openpyxl.load_workbook(str(summary_file), read_only=True, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     wb.close()
@@ -969,7 +993,7 @@ def _load_summary_from_xlsx():
         total_diff += diff_count
 
         goods_amt = float(row[14]) if row[14] else 0
-        return_amt = float(row[16]) if row[16] else 0
+        return_amt = abs(float(row[16])) if row[16] else 0
         payable = float(row[17]) if row[17] else 0
         total_payable += payable
         total_return += return_amt
@@ -978,9 +1002,9 @@ def _load_summary_from_xlsx():
         if diff_count == 0:
             color, status, status_text = "green", "✅ 无需处理", "正常"
         elif pct >= 85:
-            color, status, status_text = "yellow", "⚠️ 有差异待确认", "待确认"
+            color, status, status_text = "yellow", '⚠️ 有差异项，请处理后提交 <span class="tip-icon" title="该供应商存在数量/金额差异条目，需核对后在系统中修正再提交">?</span>', "待确认"
         else:
-            color, status, status_text = "red", "❌ 需人工介入", "需介入"
+            color, status, status_text = "red", '❌ 一致率偏低，请重点核查 <span class="tip-icon" title="该供应商采购对账一致率低于85%，建议逐条核对差异项和未匹配项">?</span>', "需介入"
 
         def _rate_color(rate_str):
             p = _pct(rate_str)
@@ -988,10 +1012,10 @@ def _load_summary_from_xlsx():
             if p >= 70: return "#eab308"
             return "#dc2626"
 
-        # 找对应的报告文件
+        # 找对应的报告文件（同日期+同供应商名）
         report_file = ""
         for f in reports:
-            if name in f and "汇总" not in f:
+            if name in f and "汇总" not in f and report_date in f:
                 report_file = f
                 break
 
@@ -1019,12 +1043,14 @@ def _load_summary_from_xlsx():
 
     # 合计行数据
     totals_row = [r for r in data_rows if r[0] == "合计"]
-    overall_rate = str(totals_row[0][9]) if totals_row else "-"
+    overall_purchase_rate = str(totals_row[0][9]) if totals_row else "-"
+    overall_finance_rate = str(totals_row[0][13]) if totals_row else "-"
 
     summary = {
         "date": display_date,
         "total_suppliers": total_suppliers,
-        "purchase_rate": overall_rate,
+        "purchase_rate": overall_purchase_rate,
+        "finance_rate": overall_finance_rate,
         "total_diff": total_diff,
         "total_payable": f"{total_payable:,.2f}",
         "total_return": f"{total_return:,.2f}",
@@ -1037,7 +1063,7 @@ def _load_summary_from_xlsx():
 # 后台对账
 # ═══════════════════════════════════════
 
-def _start_reconcile(selected_suppliers, no_cache):
+def _start_reconcile(selected_suppliers, no_cache, mode="purchase"):
     run_state["running"] = True
     run_state["done"] = False
     run_state["logs"] = []
@@ -1045,12 +1071,13 @@ def _start_reconcile(selected_suppliers, no_cache):
     run_state["current_index"] = 0
     run_state["total"] = len(selected_suppliers)
     run_state["results"] = []
+    run_state["mode"] = mode
 
-    thread = threading.Thread(target=_run_process, args=(selected_suppliers, no_cache), daemon=True)
+    thread = threading.Thread(target=_run_process, args=(selected_suppliers, no_cache, mode), daemon=True)
     thread.start()
 
 
-def _run_process(selected_suppliers, no_cache):
+def _run_process(selected_suppliers, no_cache, mode="purchase"):
     try:
         cmd = [sys.executable, "-X", "utf8", "-u",
                os.path.join(SCRIPT_DIR, "main.py")]
@@ -1059,6 +1086,8 @@ def _run_process(selected_suppliers, no_cache):
 
         env = os.environ.copy()
         env["RECONCILE_SUPPLIERS"] = ",".join(selected_suppliers)
+        env["RECONCILE_BASE_DIR"] = BASE_DIR
+        env["RECONCILE_MODE"] = mode
         env["PYTHONIOENCODING"] = "utf-8"
 
         process = subprocess.Popen(

@@ -27,3 +27,8 @@ Thumbs.db
 
 # Flask session
 flask_session/
+
+# 内部业务文件 — 不公开
+锐仕/
+*.docx
+*.bat

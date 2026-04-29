@@ -1,0 +1,166 @@
+
+<style>
+.card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;margin-bottom:1rem}
+.section-label{font-size:11px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px}
+.q{font-size:14px;color:var(--color-text-primary);margin:0 0 8px;line-height:1.5}
+.hint{font-size:12px;color:var(--color-text-secondary);margin:0 0 10px;font-style:italic}
+.options{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.opt{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:6px 10px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-secondary)}
+.opt input{margin:0}
+.answer-box{width:100%;box-sizing:border-box;font-size:13px;padding:8px 10px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-tertiary);background:var(--color-background-primary);color:var(--color-text-primary);resize:vertical;min-height:52px}
+.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);margin-bottom:8px}
+.tag-code{background:var(--color-background-danger);color:var(--color-text-danger)}
+.tag-confirm{background:var(--color-background-success);color:var(--color-text-success)}
+.divider{height:0.5px;background:var(--color-border-tertiary);margin:16px 0}
+</style>
+
+<div style="padding:1rem 0">
+
+<p style="font-size:13px;color:var(--color-text-secondary);margin:0 0 1.5rem">填写人：&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 职位：采购助理 / 财务（圈一个）&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 日期：__________</p>
+
+<div class="card">
+  <div class="section-label">第一部分：收货核对（采购助理填）</div>
+
+  <div class="q">Q1. 供应商送货时，你们当场核对哪些内容？</div>
+  <div class="options">
+    <label class="opt"><input type="checkbox"> 商品条码</label>
+    <label class="opt"><input type="checkbox"> 商品数量</label>
+    <label class="opt"><input type="checkbox"> 商品单价</label>
+    <label class="opt"><input type="checkbox"> 商品金额</label>
+    <label class="opt"><input type="checkbox"> 商品名称/规格</label>
+  </div>
+
+  <div class="q">Q2. 供应商是按箱送货，你们入库按只/包/瓶记录。核对数量时，你们是：</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="unit"> 当场换算成只/包/瓶再比对</label>
+    <label class="opt"><input type="radio" name="unit"> 只核对箱数，换算由系统做</label>
+    <label class="opt"><input type="radio" name="unit"> 按金额总数核对，不管单位</label>
+  </div>
+
+  <div class="q">Q3. 如果送货单数量和入库单数量不一致，你们怎么处理？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="qty_diff"> 以送货单为准，修改入库单</label>
+    <label class="opt"><input type="radio" name="qty_diff"> 以入库单（实收）为准，让供应商重开</label>
+    <label class="opt"><input type="radio" name="qty_diff"> 两边协商，按实际签收数量为准</label>
+  </div>
+  <textarea class="answer-box" placeholder="如果有其他情况请补充..."></textarea>
+</div>
+
+<div class="card">
+  <div class="section-label">第二部分：系统入库核对（采购助理填）</div>
+
+  <div class="q">Q4. 在用友系统做入库操作后，你们会核对入库单和送货单的哪些字段？</div>
+  <div class="hint">（系统目前核对：条码、数量、单价、金额——请确认是否完整）</div>
+  <div class="options">
+    <label class="opt"><input type="checkbox"> 条码 / 商品编码</label>
+    <label class="opt"><input type="checkbox"> 数量</label>
+    <label class="opt"><input type="checkbox"> 单价</label>
+    <label class="opt"><input type="checkbox"> 金额</label>
+    <label class="opt"><input type="checkbox"> 仓库 / 门店</label>
+    <label class="opt"><input type="checkbox"> PO采购订单号</label>
+  </div>
+
+  <div class="q">Q5. 有时一张送货单对应多个采购订单（多个PO号）。这种情况你们怎么核对？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="multi_po"> 按条码逐行比，不管PO号</label>
+    <label class="opt"><input type="radio" name="multi_po"> 先按PO号分组，再逐行比</label>
+    <label class="opt"><input type="radio" name="multi_po"> 只核对总金额是否一致</label>
+  </div>
+
+  <div class="q">Q6. 如果某个商品出现在送货单但系统里没有入库记录，你们怎么处理？</div>
+  <textarea class="answer-box" placeholder="请描述处理步骤..."></textarea>
+</div>
+
+<div class="card">
+  <div class="section-label">第三部分：财务结算核对（财务填）</div>
+
+  <div class="q">Q7. 财务核对进货单时，是跟哪份单据比对？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="fin_source"> 纸质送货单</label>
+    <label class="opt"><input type="radio" name="fin_source"> 入库单（系统打印）</label>
+    <label class="opt"><input type="radio" name="fin_source"> 两者都要比</label>
+  </div>
+
+  <div class="q">Q8. 退货处理：退货单金额是直接从本次应付款里扣减，还是下次结算时扣？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="return"> 本次直接扣减</label>
+    <label class="opt"><input type="radio" name="return"> 下次结算扣</label>
+    <label class="opt"><input type="radio" name="return"> 视供应商而定</label>
+  </div>
+  <textarea class="answer-box" placeholder="哪些供应商本次扣，哪些下次扣？"></textarea>
+
+  <div class="q">Q9. 发现金额差异后，什么情况下你们可以直接通过，什么情况下必须退回采购重新确认？</div>
+  <textarea class="answer-box" placeholder="请描述你们的判断标准，例如：差额在X元以内可直接通过..."></textarea>
+</div>
+
+<div class="card">
+  <div class="section-label">第四部分：差异处理记录</div>
+
+  <div class="q">Q10. 差异处理完后，现在有没有留记录？记在哪里？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="record"> 没有专门记录</label>
+    <label class="opt"><input type="radio" name="record"> 记在Excel表格里</label>
+    <label class="opt"><input type="radio" name="record"> 记在企微/钉钉聊天里</label>
+    <label class="opt"><input type="radio" name="record"> 有专门的差异台账</label>
+  </div>
+
+  <div class="q">Q11. 系统发现差异后，由谁来判断"这条差异可以通过"还是"必须找供应商核实"？</div>
+  <div class="options">
+    <label class="opt"><input type="radio" name="owner"> 采购助理自己判断</label>
+    <label class="opt"><input type="radio" name="owner"> 采购主管审批</label>
+    <label class="opt"><input type="radio" name="owner"> 财务判断</label>
+    <label class="opt"><input type="radio" name="owner"> 视金额大小而定</label>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-label">第五部分：补充确认</div>
+
+  <div class="q">Q12. 下面是系统目前的判定规则，请逐条确认是否符合你们实际做法：</div>
+  <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
+
+    <div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md)">
+      <div style="font-size:13px;margin-bottom:6px">规则A：送货单条码、数量、单价、金额全部一致 → 判定通过</div>
+      <div class="options" style="margin:0">
+        <label class="opt"><input type="radio" name="rA"> 符合</label>
+        <label class="opt"><input type="radio" name="rA"> 不符合，原因：</label>
+      </div>
+      <input type="text" placeholder="请说明..." style="width:100%;box-sizing:border-box;margin-top:6px;font-size:13px">
+    </div>
+
+    <div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md)">
+      <div style="font-size:13px;margin-bottom:6px">规则B：金额一致但数量/单价不同（换算单位导致）→ 判定通过，标注"单位换算"</div>
+      <div class="options" style="margin:0">
+        <label class="opt"><input type="radio" name="rB"> 符合</label>
+        <label class="opt"><input type="radio" name="rB"> 不符合，原因：</label>
+      </div>
+      <input type="text" placeholder="请说明..." style="width:100%;box-sizing:border-box;margin-top:6px;font-size:13px">
+    </div>
+
+    <div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md)">
+      <div style="font-size:13px;margin-bottom:6px">规则C：条码匹配但数量/金额均不同，PO号也不同 → 目前判定通过，标注"跨PO差异"</div>
+      <div class="tag tag-code">系统存疑</div>
+      <div class="options" style="margin:0">
+        <label class="opt"><input type="radio" name="rC"> 符合，这种情况确实没问题</label>
+        <label class="opt"><input type="radio" name="rC"> 不符合，这种应该标为差异需人工确认</label>
+      </div>
+    </div>
+
+    <div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md)">
+      <div style="font-size:13px;margin-bottom:6px">规则D：退货单金额直接从本次进货总额扣减，得出应付净额</div>
+      <div class="options" style="margin:0">
+        <label class="opt"><input type="radio" name="rD"> 符合</label>
+        <label class="opt"><input type="radio" name="rD"> 不符合，原因：</label>
+      </div>
+      <input type="text" placeholder="请说明..." style="width:100%;box-sizing:border-box;margin-top:6px;font-size:13px">
+    </div>
+
+  </div>
+
+  <div class="q">Q13. 目前对账流程里，有没有系统完全没覆盖到的环节？</div>
+  <textarea class="answer-box" style="min-height:72px" placeholder="例如：发票核对、账期管理、价格协议核对等..."></textarea>
+</div>
+
+<button onclick="sendPrompt('根据确认表的回答，帮我分析哪些代码逻辑需要修改')" style="width:100%;padding:10px;font-size:14px;margin-top:8px">填完后分析差异 ↗</button>
+
+</div>

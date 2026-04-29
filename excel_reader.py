@@ -303,6 +303,56 @@ def read_goods_receipt(file_path, is_return=False):
 # ═══════════════════════════════════════════════════════════
 # 供应商文件夹自动识别
 # ═══════════════════════════════════════════════════════════
+def _detect_file_type_by_content(file_path):
+    """
+    通过读取Excel前几行内容判断文件类型
+    返回: "purchase_order" / "purchase_receipt" / "goods_receipt" / "return_receipt" / None
+    """
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            rows = []
+            for i, row in enumerate(ws.iter_rows(max_row=10, values_only=True)):
+                rows.append(list(row))
+
+            all_text = " ".join(str(v) for row in rows for v in row if v is not None)
+
+            # 进货单：前几行标题含"进货单"，且有单据编号 PS-
+            if "进货单" in all_text and "PS-" in all_text:
+                wb.close()
+                return "goods_receipt"
+
+            # 退货单：前几行标题含"退货单"
+            if "退货单" in all_text and "PS-" in all_text:
+                wb.close()
+                return "return_receipt"
+
+            # 采购入库单：表头含"存货编码"+"含税单价"+"采购订单号"（明细表特征）
+            for row in rows:
+                row_text = " ".join(str(v) for v in row if v is not None)
+                if "存货编码" in row_text and "含税单价" in row_text and "采购订单号" in row_text:
+                    # 区分入库单和订单：入库单有"实收数量"
+                    if "实收数量" in row_text or "来源单据" in row_text:
+                        wb.close()
+                        return "purchase_receipt"
+                    # 采购订单：有"累计执行数量"
+                    if "累计执行数量" in row_text:
+                        wb.close()
+                        return "purchase_order"
+
+            # 汇总表特征：含"求和项"→ 采购入库单汇总sheet
+            for row in rows:
+                row_text = " ".join(str(v) for v in row if v is not None)
+                if "求和项" in row_text and "单据编号" in row_text:
+                    wb.close()
+                    return "purchase_receipt"
+
+        wb.close()
+    except Exception:
+        pass
+    return None
+
+
 def identify_files(supplier_dir):
     """
     自动识别供应商文件夹下的各类Excel文件
@@ -339,19 +389,21 @@ def identify_files(supplier_dir):
         if f.suffix.lower() != ".xlsx":
             continue
 
-        # 太古特殊文件名处理
-        if supplier_name == "太古":
-            if "puarrival" in fname:
-                result["goods_receipt"] = str(f)
-                continue
-            if "采购入库单" in f.name:
-                result["purchase_receipt"] = str(f)
-                continue
-            if "采购订单" in f.name:
-                result["purchase_order"] = str(f)
-                continue
+        # ── 用友默认文件名映射（通用，不限供应商） ──
+        if "puarrival" in fname:
+            result["goods_receipt"] = str(f)
+            continue
+        if "pureceiptentry" in fname or "pureceipt" in fname:
+            result["purchase_receipt"] = str(f)
+            continue
+        if "purchaseorder" in fname or "poorder" in fname:
+            result["purchase_order"] = str(f)
+            continue
+        if "pureturnentry" in fname or "pureturn" in fname:
+            result["return_receipt"] = str(f)
+            continue
 
-        # 通用规则
+        # ── 中文关键词规则 ──
         if "退货单" in f.name:
             result["return_receipt"] = str(f)
         elif "进货单" in f.name:
@@ -360,6 +412,20 @@ def identify_files(supplier_dir):
             result["purchase_receipt"] = str(f)
         elif "采购订单" in f.name:
             result["purchase_order"] = str(f)
+
+    # ── 内容检测兜底：对未匹配的xlsx文件按内容判断类型 ──
+    unmatched = []
+    for f in Path(supplier_dir).iterdir():
+        if f.name.startswith("~$") or f.suffix.lower() != ".xlsx":
+            continue
+        if str(f) not in [result["purchase_order"], result["purchase_receipt"],
+                          result["goods_receipt"], result["return_receipt"]]:
+            unmatched.append(f)
+
+    for f in unmatched:
+        detected = _detect_file_type_by_content(str(f))
+        if detected and result[detected] is None:
+            result[detected] = str(f)
 
     return result
 
